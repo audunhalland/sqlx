@@ -6,6 +6,7 @@ use sqlx::describe::Describe;
 
 use crate::database::DatabaseExt;
 
+use crate::query_macros::data::QueryData;
 use std::fmt::{self, Display, Formatter};
 
 pub struct RustColumn {
@@ -13,86 +14,19 @@ pub struct RustColumn {
     pub(super) type_: TokenStream,
 }
 
-struct DisplayColumn<'a> {
-    // zero-based index, converted to 1-based number
-    idx: usize,
-    name: Option<&'a str>,
-}
-
-impl Display for DisplayColumn<'_> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let num = self.idx + 1;
-
-        if let Some(name) = self.name {
-            write!(f, "column #{} ({:?})", num, name)
-        } else {
-            write!(f, "column #{}", num)
-        }
-    }
-}
-
-pub fn columns_to_rust<DB: DatabaseExt>(describe: &Describe<DB>) -> crate::Result<Vec<RustColumn>> {
-    describe
-        .result_columns
+pub fn columns_to_rust<DB: DatabaseExt>(query_data: &QueryData) -> crate::Result<Vec<RustColumn>> {
+    query_data
+        .outputs
         .iter()
         .enumerate()
-        .map(|(i, column)| -> crate::Result<_> {
-            let name = column
-                .name
-                .as_deref()
-                .ok_or_else(|| format!("column at position {} must have a name", i))?;
-
-            let ident = parse_ident(name)?;
-
-            let mut type_ = if let Some(type_info) = &column.type_info {
-                <DB as DatabaseExt>::return_type_for_id(&type_info).map_or_else(
-                    || {
-                        let message = if let Some(feature_gate) =
-                            <DB as DatabaseExt>::get_feature_gate(&type_info)
-                        {
-                            format!(
-                                "optional feature `{feat}` required for type {ty} of {col}",
-                                ty = &type_info,
-                                feat = feature_gate,
-                                col = DisplayColumn {
-                                    idx: i,
-                                    name: column.name.as_deref()
-                                }
-                            )
-                        } else {
-                            format!(
-                                "unsupported type {ty} of {col}",
-                                ty = type_info,
-                                col = DisplayColumn {
-                                    idx: i,
-                                    name: column.name.as_deref()
-                                }
-                            )
-                        };
-                        syn::Error::new(Span::call_site(), message).to_compile_error()
-                    },
-                    |t| t.parse().unwrap(),
-                )
-            } else {
-                syn::Error::new(
-                    Span::call_site(),
-                    format!(
-                        "database couldn't tell us the type of {col}; \
-                     this can happen for columns that are the result of an expression",
-                        col = DisplayColumn {
-                            idx: i,
-                            name: column.name.as_deref()
-                        }
-                    ),
-                )
-                .to_compile_error()
-            };
-
-            if !column.non_null.unwrap_or(false) {
-                type_ = quote! { Option<#type_> };
-            }
-
-            Ok(RustColumn { ident, type_ })
+        .map(|(i, (col_name, col_type))| -> crate::Result<_> {
+            let ident = parse_ident(col_name)?;
+            Ok(RustColumn {
+                ident,
+                type_: col_type
+                    .parse()
+                    .map_err(|_| panic!("failed to parse {:?} as a Rust type", col_type))?,
+            })
         })
         .collect::<crate::Result<Vec<_>>>()
 }

@@ -3,7 +3,7 @@ use std::fmt::Display;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-pub use input::{QueryAsMacroInput, QueryMacroInput};
+pub use input::QueryMacroInput;
 pub use query::expand_query;
 
 use crate::database::DatabaseExt;
@@ -12,9 +12,40 @@ use sqlx::connection::Connection;
 use sqlx::database::Database;
 
 mod args;
+mod data;
 mod input;
 mod output;
 mod query;
+
+pub fn expand_input(mut input: QueryMacroInput) -> crate::Result<TokenStream> {
+    let source = input.src.resolve(input.src_span)?;
+}
+
+/// Run a parse/describe on the query described by this input and validate that it matches the
+/// passed number of args
+async fn describe_validate<C: Connection>(
+    query: &str,
+    conn: &mut C,
+) -> crate::Result<Describe<C::Database>> {
+    let describe = conn
+        .describe(query)
+        .await
+        .map_err(|e| syn::Error::new(self.source_span, e))?;
+
+    if self.arg_names.len() != describe.param_types.len() {
+        return Err(syn::Error::new(
+            Span::call_site(),
+            format!(
+                "expected {} parameters, got {}",
+                describe.param_types.len(),
+                self.arg_names.len()
+            ),
+        )
+        .into());
+    }
+
+    Ok(describe)
+}
 
 pub async fn expand_query_file<C: Connection>(
     input: QueryMacroInput,
